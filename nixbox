@@ -1,0 +1,201 @@
+#!/bin/bash
+
+{
+
+if [ -z "$NIXBOX_NAME" ]; then
+  NIXBOX_NAME=nixbox-daemon-container
+fi
+
+if [ -z "$NIXBOX_IMAGE" ]; then
+  NIXBOX_IMAGE=nixos/nix
+fi
+
+if [ -z "$NIXBOX_TEMPORARY_IMAGE" ]; then
+  NIXBOX_TEMPORARY_IMAGE=busybox
+fi
+
+PODMAN=
+if which podman > /dev/null; then
+  PODMAN="$(which podman)"
+elif which docker > /dev/null; then
+  PODMAN="$(which docker)"
+fi
+
+print_help() {
+  cat << EOS
+Usage: nixbox [-h]
+       nixbox <up|down|enter-daemon|enter>
+
+  Create Nix daemon container for otameshi-ing Nix.
+
+subcommands:
+
+  up ... Create and start Nix daemon container.
+  down ... Stop and destroy Nix daemon container.
+  start ... Start Nix daemon container.
+  stop ... Stop Nix daemon container.
+  enter-daemon ... Enter running Nix daemon container for debug.
+  enter ... Enter temporary Nix container.
+
+Environments:
+
+  NIXBOX_NAME="${NIXBOX_NAME}" ... container name.
+  NIXBOX_IMAGE="${NIXBOX_IMAGE}" ... container image for Nix daemon.
+  NIXBOX_TEMPORARY_IMAGE="${NIXBOX_TEMPORARY_IMAGE}" ... container image for temporary environment.
+
+Volume names:
+
+  "${NIXBOX_NAME}_etc-nix" ... (container) /etc/nix
+  "${NIXBOX_NAME}_nix" ... (container) /nix
+EOS
+}
+
+nixbox:up() {
+  for vol in etc-nix nix; do
+    if ! $PODMAN volume exists "${NIXBOX_NAME}_${vol}" > /dev/null; then
+      $PODMAN volume create "${NIXBOX_NAME}_${vol}" || return $?
+    fi
+  done
+
+  if $PODMAN container exists "$NIXBOX_NAME" > /dev/null; then
+  	$PODMAN rm "$NIXBOX_NAME"
+  fi
+
+  $PODMAN run \
+    --mount type=volume,src="${NIXBOX_NAME}_etc-nix",dst=/etc/nix \
+    --mount type=volume,src="${NIXBOX_NAME}_nix",dst=/nix \
+    --detach --name "$NIXBOX_NAME" "$NIXBOX_IMAGE" "/bin/sh" -c "$(generate-daemon-entrypoint)" || return $?
+
+  return 0
+}
+
+generate-daemon-entrypoint() {
+	echo -n "grep -e experimental-features /etc/nix/nix.conf > /dev/null"
+	echo -n '|| (echo "experimental-features = nix-command flakes" >> /etc/nix/nix.conf)'
+	echo -n "; nix-daemon"
+}
+
+nixbox:down() {
+  if ! $PODMAN container exists "$NIXBOX_NAME" > /dev/null; then
+    echo 'container already destroyed.' 1>&2
+  else
+    $PODMAN stop "$NIXBOX_NAME" && $PODMAN rm "$NIXBOX_NAME" || return $?
+  fi
+
+  for vol in etc-nix nix; do
+    if $PODMAN volume exists "${NIXBOX_NAME}_${vol}" > /dev/null; then
+      $PODMAN volume rm "${NIXBOX_NAME}_${vol}" || return $?
+    fi
+  done
+
+  return 0
+}
+
+nixbox:start() {
+  if ! $PODMAN container exists "$NIXBOX_NAME" > /dev/null; then
+    echo 'container not found.' 1>&2
+  else
+  	$PODMAN start "$NIXBOX_NAME" || return $?
+  fi
+
+  return 0
+}
+
+nixbox:stop() {
+  if ! $PODMAN container exists "$NIXBOX_NAME" > /dev/null; then
+    echo 'container not found.' 1>&2
+  else
+  	$PODMAN stop "$NIXBOX_NAME" || return $?
+  fi
+
+  return 0
+}
+
+nixbox:enter-daemon() {
+  if ! $PODMAN container exists "$NIXBOX_NAME" > /dev/null; then
+    echo 'Error: container not found.' 1>&2
+    return 1
+  fi
+
+  $PODMAN exec -it "$NIXBOX_NAME" /bin/sh
+}
+
+nixbox:enter() {
+	local args
+	args=($@)
+	
+	if [ "${args[0]}" = "-c" ]; then
+    command="${args[@]:1}"
+  else
+    command=""
+  fi
+
+  if [ -z "$command" ]; then
+    command="/bin/sh"
+  fi
+
+  $PODMAN run --rm \
+    --mount type=volume,src="${NIXBOX_NAME}_etc-nix",dst=/etc/nix,ro=true \
+    --mount type=volume,src="${NIXBOX_NAME}_nix",dst=/nix,ro=true \
+    --mount type=bind,src="$PWD",dst="/workspace" \
+    -u "$(id -u):$(id -g)" --userns=keep-id \
+    -it "$NIXBOX_TEMPORARY_IMAGE" /bin/sh -lc \
+    "$(generate-nixbox-temporary-profile $command)"
+}
+
+generate-nixbox-temporary-profile() {
+	echo 'export HOME=`mktemp -d`'
+	echo 'export NIX_REMOTE=daemon'
+	echo 'export PATH="/nix/var/nix/profiles/default/bin:$PATH"'
+	echo 'export PS1="(nixbox-temp) $PS1"'
+	echo 'USER=$(whoami) . /nix/var/nix/profiles/default/etc/profile.d/nix.sh'
+	echo "cd /workspace; exec ${@}"
+}
+
+main() {
+  if [ -z "$PODMAN" ]; then
+    echo 'Error: container runtime not installed. (required: podman or docker)' 1>&2
+    return 1
+  fi
+
+  args=($@)
+  case "${args[0]}" in
+  "-h")
+    print_help
+    return 0
+    ;;
+
+  "up")
+    nixbox:up
+    ;;
+
+  "down")
+    nixbox:down
+    ;;
+
+  "start")
+    nixbox:start
+    ;;
+
+  "stop")
+  	nixbox:stop
+  	;;
+
+  "enter-daemon")
+    nixbox:enter-daemon
+    ;;
+
+  "enter")
+    nixbox:enter ${args[@]:1}
+    ;;
+
+  *)
+    print_help
+    return 1
+    ;;
+  esac
+}
+
+main $@
+
+}
