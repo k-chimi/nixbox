@@ -47,11 +47,12 @@ Volume names:
 
   "${NIXBOX_NAME}_etc-nix" ... (container) /etc/nix
   "${NIXBOX_NAME}_nix" ... (container) /nix
+  "${NIXBOX_NAME}_cache" ... (container) /.cache
 EOS
 }
 
 nixbox:up() {
-  for vol in etc-nix nix; do
+  for vol in etc-nix nix cache; do
     if ! $PODMAN volume exists "${NIXBOX_NAME}_${vol}" > /dev/null; then
       $PODMAN volume create "${NIXBOX_NAME}_${vol}" || return $?
     fi
@@ -82,7 +83,7 @@ nixbox:down() {
     $PODMAN stop "$NIXBOX_NAME" && $PODMAN rm "$NIXBOX_NAME" || return $?
   fi
 
-  for vol in etc-nix nix; do
+  for vol in etc-nix nix cache; do
     if $PODMAN volume exists "${NIXBOX_NAME}_${vol}" > /dev/null; then
       $PODMAN volume rm "${NIXBOX_NAME}_${vol}" || return $?
     fi
@@ -137,6 +138,7 @@ nixbox:enter() {
   $PODMAN run --rm \
     --mount type=volume,src="${NIXBOX_NAME}_etc-nix",dst=/etc/nix,ro=true \
     --mount type=volume,src="${NIXBOX_NAME}_nix",dst=/nix,ro=true \
+    --mount type=volume,src="${NIXBOX_NAME}_cache",dst=/.cache,U=true \
     --mount type=bind,src="$PWD",dst="/workspace" \
     -u "$(id -u):$(id -g)" --userns=keep-id \
     -it "$NIXBOX_TEMPORARY_IMAGE" /bin/sh -lc \
@@ -145,6 +147,7 @@ nixbox:enter() {
 
 generate-nixbox-temporary-profile() {
 	echo 'export HOME=`mktemp -d`'
+	echo 'export XDG_CACHE_HOME="/.cache"'
 	echo 'export NIX_REMOTE=daemon'
 	echo 'export PATH="/nix/var/nix/profiles/default/bin:$PATH"'
 	echo 'export PS1="(nixbox-temp) $PS1"'
