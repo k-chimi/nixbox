@@ -8,6 +8,9 @@
 
 Podman または Docker そして Bash が動く環境であることが前提です。
 
+> [!NOTE]
+> ホスト環境が Linux である場合、[Toolbx](https://containertoolbx.org/) に Nix をインストールするほうがより学習に適しているかもしれません。
+
 <details>
 <summary>
 
