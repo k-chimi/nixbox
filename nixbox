@@ -1,6 +1,6 @@
-#!/bin/bash
+#!/usr/bin/env bash
 
-{
+(
 
 if [ -z "$NIXBOX_NAME" ]; then
   NIXBOX_NAME=nixbox-daemon-container
@@ -28,7 +28,7 @@ Usage: nixbox [-h]
 
   Create Nix daemon container for otameshi-ing Nix.
 
-subcommands:
+Subcommands:
 
   up ... Create and start Nix daemon container.
   down ... Stop and destroy Nix daemon container.
@@ -42,6 +42,7 @@ Environments:
   NIXBOX_NAME="${NIXBOX_NAME}" ... container name.
   NIXBOX_IMAGE="${NIXBOX_IMAGE}" ... container image for Nix daemon.
   NIXBOX_TEMPORARY_IMAGE="${NIXBOX_TEMPORARY_IMAGE}" ... container image for temporary environment.
+  NIXBOX_KEEPID_DISABLED="${NIXBOX_KEEPID_DISABLED:-0}" ... suppress keep-id when enabled. (example: "1")
 
 Volume names:
 
@@ -123,6 +124,7 @@ nixbox:enter-daemon() {
 
 nixbox:enter() {
 	local args
+	local -a keepid_options
 	args=($@)
 	
 	if [ "${args[0]}" = "-c" ]; then
@@ -135,14 +137,22 @@ nixbox:enter() {
     command="/bin/sh"
   fi
 
+  if [[ "$NIXBOX_KEEPID_DISABLED" =~ ^0?$ ]]; then
+    keepid_options=(-u "$(id -u):$(id -g)" --userns=keep-id)
+  fi
+
   $PODMAN run --rm \
     --mount type=volume,src="${NIXBOX_NAME}_etc-nix",dst=/etc/nix,ro=true \
     --mount type=volume,src="${NIXBOX_NAME}_nix",dst=/nix,ro=true \
     --mount type=volume,src="${NIXBOX_NAME}_cache",dst=/.cache,U=true \
     --mount type=bind,src="$PWD",dst="/workspace" \
-    -u "$(id -u):$(id -g)" --userns=keep-id \
+    ${keepid_options[*]} \
     -it "$NIXBOX_TEMPORARY_IMAGE" /bin/sh -lc \
     "$(generate-nixbox-temporary-profile $command)"
+}
+
+generate-tz() {
+  date +%Z%:z | sed 's/\+/-/; T minus; q; :minus; s/-/+/'
 }
 
 generate-nixbox-temporary-profile() {
@@ -151,6 +161,7 @@ generate-nixbox-temporary-profile() {
 	echo 'export NIX_REMOTE=daemon'
 	echo 'export PATH="/nix/var/nix/profiles/default/bin:$PATH"'
 	echo 'export PS1="(nixbox-temp) $PS1"'
+	echo 'export TZ="'"$(generate-tz)"'"'
 	echo 'USER=$(whoami) . /nix/var/nix/profiles/default/etc/profile.d/nix.sh'
 	echo "cd /workspace; exec ${@}"
 }
@@ -201,4 +212,4 @@ main() {
 
 main $@
 
-}
+)
